@@ -1,1 +1,24 @@
+name: 'Setup Kustomize'
+description: 'Install Kustomize CLI (no external dependencies)'
 
+inputs:
+  version:
+    description: 'Kustomize version to install'
+    required: false
+    default: 'v5.3.0'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Kustomize
+      shell: bash
+      run: |
+        echo "Installing Kustomize ${{ inputs.version }}..."
+        
+        curl -sLO "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${{ inputs.version }}/kustomize_${{ inputs.version }}_linux_amd64.tar.gz"
+        tar xzf kustomize_${{ inputs.version }}_linux_amd64.tar.gz
+        chmod +x kustomize
+        mv kustomize /usr/local/bin/
+        
+        echo "Kustomize installed:"
+        kustomize version
