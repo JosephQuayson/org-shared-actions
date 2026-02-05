@@ -1,1 +1,72 @@
+name: 'ArgoCD Sync'
+description: 'Install ArgoCD CLI, login, sync application, and wait for health'
 
+inputs:
+  server:
+    description: 'ArgoCD server URL (without https://)'
+    required: true
+  username:
+    description: 'ArgoCD username'
+    required: true
+  password:
+    description: 'ArgoCD password'
+    required: true
+  app-name:
+    description: 'ArgoCD application name'
+    required: true
+  timeout:
+    description: 'Sync timeout in seconds'
+    required: false
+    default: '300'
+  argocd-version:
+    description: 'ArgoCD CLI version'
+    required: false
+    default: 'latest'
+
+outputs:
+  sync-status:
+    description: 'Sync status (Synced/Failed)'
+    value: ${{ steps.sync.outputs.status }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install ArgoCD CLI
+      shell: bash
+      run: |
+        if [ "${{ inputs.argocd-version }}" == "latest" ]; then
+          curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+        else
+          curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/download/${{ inputs.argocd-version }}/argocd-linux-amd64
+        fi
+        chmod +x argocd
+        echo "ArgoCD CLI installed"
+
+    - name: Login to ArgoCD
+      shell: bash
+      run: |
+        ./argocd login ${{ inputs.server }} \
+          --username ${{ inputs.username }} \
+          --password ${{ inputs.password }} \
+          --grpc-web
+        echo "✅ Logged in to ArgoCD"
+
+    - name: Sync Application
+      id: sync
+      shell: bash
+      run: |
+        echo "Triggering sync for ${{ inputs.app-name }}..."
+        ./argocd app sync ${{ inputs.app-name }} --grpc-web
+        
+        echo "Waiting for sync to complete..."
+        if ./argocd app wait ${{ inputs.app-name }} \
+          --timeout ${{ inputs.timeout }} \
+          --health \
+          --grpc-web; then
+          echo "status=Synced" >> $GITHUB_OUTPUT
+          echo "✅ Sync completed successfully!"
+        else
+          echo "status=Failed" >> $GITHUB_OUTPUT
+          echo "❌ Sync failed!"
+          exit 1
+        fi
