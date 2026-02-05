@@ -1,1 +1,79 @@
+name: 'Smoke Test'
+description: 'Run HTTP health check with retries'
 
+inputs:
+  url:
+    description: 'Health check URL'
+    required: true
+  expected-status:
+    description: 'Expected HTTP status code'
+    required: false
+    default: '200'
+  max-retries:
+    description: 'Maximum retry attempts'
+    required: false
+    default: '5'
+  retry-delay:
+    description: 'Delay between retries in seconds'
+    required: false
+    default: '10'
+  initial-delay:
+    description: 'Initial delay before first check in seconds'
+    required: false
+    default: '10'
+
+outputs:
+  status:
+    description: 'Final HTTP status code'
+    value: ${{ steps.test.outputs.status }}
+  success:
+    description: 'Whether test passed (true/false)'
+    value: ${{ steps.test.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Run Smoke Test
+      id: test
+      shell: bash
+      run: |
+        echo "Starting smoke test..."
+        echo "URL: ${{ inputs.url }}"
+        echo "Expected status: ${{ inputs.expected-status }}"
+        
+        sleep ${{ inputs.initial-delay }}
+        
+        MAX_RETRIES=${{ inputs.max-retries }}
+        RETRY_COUNT=0
+        HTTP_STATUS="000"
+        
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ inputs.url }}" || echo "000")
+          
+          if [ "$HTTP_STATUS" == "${{ inputs.expected-status }}" ]; then
+            echo "status=$HTTP_STATUS" >> $GITHUB_OUTPUT
+            echo "success=true" >> $GITHUB_OUTPUT
+            echo "========================================="
+            echo "✅ SMOKE TEST PASSED!"
+            echo "========================================="
+            echo "URL: ${{ inputs.url }}"
+            echo "Status: $HTTP_STATUS"
+            echo "========================================="
+            exit 0
+          fi
+          
+          RETRY_COUNT=$((RETRY_COUNT + 1))
+          echo "Attempt $RETRY_COUNT/$MAX_RETRIES - Status: $HTTP_STATUS - Retrying in ${{ inputs.retry-delay }}s..."
+          sleep ${{ inputs.retry-delay }}
+        done
+        
+        echo "status=$HTTP_STATUS" >> $GITHUB_OUTPUT
+        echo "success=false" >> $GITHUB_OUTPUT
+        echo "========================================="
+        echo "❌ SMOKE TEST FAILED!"
+        echo "========================================="
+        echo "URL: ${{ inputs.url }}"
+        echo "Expected: ${{ inputs.expected-status }}"
+        echo "Got: $HTTP_STATUS"
+        echo "========================================="
+        exit 1
