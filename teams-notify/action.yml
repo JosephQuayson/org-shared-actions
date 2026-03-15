@@ -61,29 +61,27 @@ runs:
         # Generate unique notification ID
         NOTIFICATION_ID="${{ github.run_id }}-${RANDOM}-$(date +%s)"
         TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
         
         echo "notification_id=${NOTIFICATION_ID}" >> $GITHUB_OUTPUT
         echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
+        echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
         
         # Set status configuration
         case "${{ inputs.status }}" in
           success)
-            echo "color=00FF00" >> $GITHUB_OUTPUT
             echo "icon=✅" >> $GITHUB_OUTPUT
             echo "status_text=Succeeded" >> $GITHUB_OUTPUT
             ;;
           failure)
-            echo "color=FF0000" >> $GITHUB_OUTPUT
             echo "icon=❌" >> $GITHUB_OUTPUT
             echo "status_text=Failed" >> $GITHUB_OUTPUT
             ;;
           cancelled)
-            echo "color=FFA500" >> $GITHUB_OUTPUT
             echo "icon=⚠️" >> $GITHUB_OUTPUT
             echo "status_text=Cancelled" >> $GITHUB_OUTPUT
             ;;
           *)
-            echo "color=808080" >> $GITHUB_OUTPUT
             echo "icon=ℹ️" >> $GITHUB_OUTPUT
             echo "status_text=${{ inputs.status }}" >> $GITHUB_OUTPUT
             ;;
@@ -113,8 +111,8 @@ runs:
       id: build-payload
       shell: bash
       run: |
-        # Create comprehensive payload for future integrations (e.g., Jira)
-        PAYLOAD=$(cat << 'EOF'
+        # Create payload JSON for future integrations (e.g., Jira)
+        cat > /tmp/payload.json << 'PAYLOAD_EOF'
         {
           "metadata": {
             "notification_id": "${{ steps.generate-metadata.outputs.notification_id }}",
@@ -124,17 +122,14 @@ runs:
           },
           "context": {
             "repository": "${{ github.repository }}",
-            "repository_url": "${{ github.server_url }}/${{ github.repository }}",
             "workflow": "${{ github.workflow }}",
             "run_id": "${{ github.run_id }}",
             "run_number": "${{ github.run_number }}",
-            "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
             "job": "${{ github.job }}",
             "step_name": "${{ inputs.step_name }}",
             "environment": "${{ inputs.environment }}",
             "ref_name": "${{ github.ref_name }}",
             "sha": "${{ github.sha }}",
-            "short_sha": "${GITHUB_SHA::7}",
             "actor": "${{ github.actor }}",
             "event_name": "${{ github.event_name }}"
           },
@@ -143,119 +138,74 @@ runs:
             "status_text": "${{ steps.generate-metadata.outputs.status_text }}",
             "title": "${{ inputs.title }}",
             "message": "${{ inputs.custom_message }}",
-            "priority": "${{ inputs.priority }}",
-            "priority_text": "${{ steps.generate-metadata.outputs.priority_text }}"
-          },
-          "additional_data": ${{ inputs.additional_facts }}
+            "priority": "${{ inputs.priority }}"
+          }
         }
-        EOF
-        )
+        PAYLOAD_EOF
         
-        # Escape for output
-        PAYLOAD_ESCAPED=$(echo "$PAYLOAD" | jq -c .)
-        echo "payload_json=${PAYLOAD_ESCAPED}" >> $GITHUB_OUTPUT
+        PAYLOAD_JSON=$(cat /tmp/payload.json | tr -d '\n' | tr -s ' ')
+        echo "payload_json=${PAYLOAD_JSON}" >> $GITHUB_OUTPUT
 
     - name: Build and Send Teams Notification
       id: send-notification
       shell: bash
       run: |
-        # Build priority header
-        PRIORITY_HEADER=""
+        # Build the card body elements
+        BODY_ELEMENTS=""
+        
+        # Title
+        BODY_ELEMENTS='{"type":"TextBlock","size":"Large","weight":"Bolder","text":"${{ steps.generate-metadata.outputs.icon }} ${{ inputs.title }}","wrap":true}'
+        
+        # Status with priority
+        PRIORITY_PREFIX=""
         if [ -n "${{ steps.generate-metadata.outputs.priority_text }}" ]; then
-          PRIORITY_HEADER="${{ steps.generate-metadata.outputs.priority_icon }} **${{ steps.generate-metadata.outputs.priority_text }}** | "
+          PRIORITY_PREFIX="${{ steps.generate-metadata.outputs.priority_icon }} ${{ steps.generate-metadata.outputs.priority_text }} | "
         fi
+        BODY_ELEMENTS="${BODY_ELEMENTS},{\"type\":\"TextBlock\",\"text\":\"${PRIORITY_PREFIX}**Status:** ${{ steps.generate-metadata.outputs.status_text }}\",\"wrap\":true}"
         
-        # Build mention text
-        MENTION_TEXT=""
-        if [ -n "${{ inputs.mention_users }}" ]; then
-          MENTION_TEXT="**Attention:** ${{ inputs.mention_users }}"
-        fi
-        
-        # Build body array as JSON
-        BODY=$(cat << 'EOF'
-        [
-          {
-            "type": "TextBlock",
-            "size": "Large",
-            "weight": "Bolder",
-            "text": "${{ steps.generate-metadata.outputs.icon }} ${{ inputs.title }}",
-            "wrap": true
-          },
-          {
-            "type": "TextBlock",
-            "text": "**Status:** ${{ steps.generate-metadata.outputs.status_text }}",
-            "wrap": true,
-            "spacing": "Small"
-          },
-          {
-            "type": "FactSet",
-            "facts": [
-              {"title": "Repository", "value": "${{ github.repository }}"},
-              {"title": "Workflow", "value": "${{ github.workflow }}"},
-              {"title": "Run", "value": "#${{ github.run_number }}"},
-              {"title": "Branch", "value": "${{ github.ref_name }}"},
-              {"title": "Commit", "value": "'"${GITHUB_SHA:0:7}"'"},,
-              {"title": "Actor", "value": "${{ github.actor }}"}
-            ]
-          }
-        ]
-        EOF
-        )
-        
-        # Add environment if specified
+        # Environment
         if [ -n "${{ inputs.environment }}" ]; then
-          BODY=$(echo "$BODY" | jq '. += [{"type": "TextBlock", "text": "**Environment:** ${{ inputs.environment }}", "wrap": true, "spacing": "Small"}]')
+          BODY_ELEMENTS="${BODY_ELEMENTS},{\"type\":\"TextBlock\",\"text\":\"**Environment:** ${{ inputs.environment }}\",\"wrap\":true}"
         fi
         
-        # Add step name if specified
+        # Step name
         if [ -n "${{ inputs.step_name }}" ]; then
-          BODY=$(echo "$BODY" | jq '. += [{"type": "TextBlock", "text": "**Step:** ${{ inputs.step_name }}", "wrap": true, "spacing": "Small"}]')
+          BODY_ELEMENTS="${BODY_ELEMENTS},{\"type\":\"TextBlock\",\"text\":\"**Step:** ${{ inputs.step_name }}\",\"wrap\":true}"
         fi
         
-        # Add custom message if specified
+        # Custom message
         if [ -n "${{ inputs.custom_message }}" ]; then
-          BODY=$(echo "$BODY" | jq --arg msg "${{ inputs.custom_message }}" '. += [{"type": "TextBlock", "text": $msg, "wrap": true, "spacing": "Medium"}]')
+          BODY_ELEMENTS="${BODY_ELEMENTS},{\"type\":\"TextBlock\",\"text\":\"${{ inputs.custom_message }}\",\"wrap\":true}"
         fi
         
-        # Add mentions if specified
+        # Mention users
         if [ -n "${{ inputs.mention_users }}" ]; then
-          BODY=$(echo "$BODY" | jq --arg mention "**Attention:** ${{ inputs.mention_users }}" '. += [{"type": "TextBlock", "text": $mention, "wrap": true, "spacing": "Medium"}]')
+          BODY_ELEMENTS="${BODY_ELEMENTS},{\"type\":\"TextBlock\",\"text\":\"**Attention:** ${{ inputs.mention_users }}\",\"wrap\":true}"
         fi
         
-        # Add notification ID
-        BODY=$(echo "$BODY" | jq --arg id "ID: ${{ steps.generate-metadata.outputs.notification_id }}" '. += [{"type": "TextBlock", "text": $id, "size": "Small", "isSubtle": true, "spacing": "Medium"}]')
+        # Facts
+        BODY_ELEMENTS="${BODY_ELEMENTS},{\"type\":\"FactSet\",\"facts\":[{\"title\":\"Repository\",\"value\":\"${{ github.repository }}\"},{\"title\":\"Workflow\",\"value\":\"${{ github.workflow }}\"},{\"title\":\"Run\",\"value\":\"#${{ github.run_number }}\"},{\"title\":\"Branch\",\"value\":\"${{ github.ref_name }}\"},{\"title\":\"Commit\",\"value\":\"${{ steps.generate-metadata.outputs.short_sha }}\"},{\"title\":\"Actor\",\"value\":\"${{ github.actor }}\"}]}"
         
-        # Build complete adaptive card payload
-        PAYLOAD=$(jq -n \
-          --argjson body "$BODY" \
-          --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-          --arg commit_url "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}" \
-          '{
-            "type": "message",
-            "attachments": [
-              {
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": {
-                  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                  "type": "AdaptiveCard",
-                  "version": "1.4",
-                  "body": $body,
-                  "actions": [
-                    {
-                      "type": "Action.OpenUrl",
-                      "title": "View Workflow Run",
-                      "url": $run_url
-                    },
-                    {
-                      "type": "Action.OpenUrl",
-                      "title": "View Commit",
-                      "url": $commit_url
-                    }
-                  ]
-                }
-              }
-            ]
-          }')
+        # Notification ID
+        BODY_ELEMENTS="${BODY_ELEMENTS},{\"type\":\"TextBlock\",\"text\":\"ID: ${{ steps.generate-metadata.outputs.notification_id }}\",\"size\":\"Small\",\"isSubtle\":true}"
+        
+        # Build complete payload
+        PAYLOAD='{
+          "type": "message",
+          "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "content": {
+              "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+              "type": "AdaptiveCard",
+              "version": "1.4",
+              "body": ['"${BODY_ELEMENTS}"'],
+              "actions": [
+                {"type": "Action.OpenUrl", "title": "View Workflow", "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"},
+                {"type": "Action.OpenUrl", "title": "View Commit", "url": "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"}
+              ]
+            }
+          }]
+        }'
         
         # Send notification
         HTTP_STATUS=$(curl -s -o /tmp/response.txt -w "%{http_code}" \
