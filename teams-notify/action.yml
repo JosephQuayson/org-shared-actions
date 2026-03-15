@@ -194,7 +194,7 @@ runs:
               {"title": "Workflow", "value": "${{ github.workflow }}"},
               {"title": "Run", "value": "#${{ github.run_number }}"},
               {"title": "Branch", "value": "${{ github.ref_name }}"},
-              {"title": "Commit", "value": "${GITHUB_SHA::7}"},
+              {"title": "Commit", "value": "'"${GITHUB_SHA:0:7}"'"},,
               {"title": "Actor", "value": "${{ github.actor }}"}
             ]
           }
